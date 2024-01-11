@@ -66,19 +66,19 @@ class AddressHamiltonian(CIHamiltonian):
 
         n_pqsr = np.copy(n)
         n_pqsr[r] = 0
-        gamma = (-1)**np.sum(n_pqsr[:r])
+        gamma = np.sum(n_pqsr[:r])
         n_pqsr[s] = 0
-        gamma *= (-1)**np.sum(n_pqsr[:s])
+        gamma += np.sum(n_pqsr[:s])
 
         if n_pqsr[q]==1 or n_pqsr[p]==1:
             return 0, 0
 
         n_pqsr[q] = 1
-        gamma *= (-1)**np.sum(n_pqsr[:q])
+        gamma += np.sum(n_pqsr[:q])
         n_pqsr[p] = 1
-        gamma *= (-1)**np.sum(n_pqsr[:p])
+        gamma += np.sum(n_pqsr[:p])
 
-        return gamma, n_pqsr
+        return (-1)**gamma, n_pqsr
 
     def get_hamiltonian(self):
         slater_dets = self.get_slater_dets(self.num_orbitals, self.num_electrons)
