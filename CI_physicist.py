@@ -37,7 +37,7 @@ class AddressHamiltonian(CIHamiltonian):
                 self.W[m,k] = self.W[m-1,k] + self.W[m-1, k-1]
 
     # Use node weights to calculate address, see equation 3.73 in Hochstuhl
-    def add(self, n):
+    def address(self, n):
         res = 0
         for m in range(self.num_orbitals):
             res += n[m]*self.W[m, int(np.sum(n[:m+1]))]
@@ -86,20 +86,20 @@ class AddressHamiltonian(CIHamiltonian):
         H = np.zeros((n_dets, n_dets), dtype=np.cdouble)
 
         for det_n in slater_dets:
-            n = self.add(det_n)
+            n = self.address(det_n)
             occ = np.flatnonzero(det_n)
             for p in range(self.num_orbitals):
                 for r in occ:
                     xi, n_pq = self.single_exc(p,r,det_n)
                     if xi != 0:
-                        m = self.add(n_pq)
+                        m = self.address(n_pq)
                         H[n,m] += xi*self.h[p,r]
 
                     for q in range(self.num_orbitals):
                         for s in occ:
                             xi, n_pqrs = self.double_exc(p,q,s,r,det_n)
                             if xi != 0:
-                                m = self.add(n_pqrs)
+                                m = self.address(n_pqrs)
                                 H[n,m] += 0.5*xi*self.g[p,q,r,s]
 
         return H
