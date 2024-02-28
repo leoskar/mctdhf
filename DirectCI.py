@@ -48,6 +48,10 @@ class DirectCI:
         # how the two-body integrals are calculated?
         self.k = h #-0.5*np.einsum('prrq->pq', g) 
 
+    def update_electron_integrals(self, h, g):
+        self.h = h
+        self.k = h
+        self.g = g
 
     # Generate a list of all Slater determinants. Order agrees with the address function.
     @staticmethod
@@ -125,7 +129,7 @@ class DirectCI:
         return self._get_k(self.num_beta_dets, self.I_beta, self.W_beta)
     
     def _get_k(self, num_dets, spin_strings, W):
-        k = np.zeros((num_dets, )*2)
+        k = np.zeros((num_dets, )*2, self.k.dtype)
         for J in spin_strings:
             j = self.address(J, W)
             occ = np.flatnonzero(J)
@@ -138,7 +142,7 @@ class DirectCI:
         return k
     
     def _get_G(self, num_dets, spin_strings, W):
-        G = np.zeros((num_dets, )*2)
+        G = np.zeros((num_dets, )*2, self.g.dtype)
         for J in spin_strings:
             j = self.address(J, W)
             occ = np.flatnonzero(J)
@@ -172,7 +176,7 @@ class DirectCI:
         return contract('bj,aj -> ab', self.get_G_beta(), C)
     
     def get_Dpq(self, C):
-        Dpq = np.zeros((self.num_alpha_dets, self.num_beta_dets) + (self.num_spatial_orbitals,)*2, dtype=np.complex128)
+        Dpq = np.zeros((self.num_alpha_dets, self.num_beta_dets) + (self.num_spatial_orbitals,)*2, C.dtype)
         for J in self.I_alpha:
             j = self.address(J, self.W_alpha)
             occ = np.flatnonzero(J)
@@ -186,7 +190,7 @@ class DirectCI:
         return Dpq
     
     def get_Gpq(self):
-        Gpq = np.zeros((self.num_beta_dets,)*2+(self.num_spatial_orbitals,)*2, dtype=np.complex128)
+        Gpq = np.zeros((self.num_beta_dets,)*2+(self.num_spatial_orbitals,)*2, self.g.dtype)
         for J in self.I_beta:
             j = self.address(J, self.W_beta)
             occ = np.flatnonzero(J)
@@ -212,8 +216,10 @@ class DirectCI:
                      + self.get_sigma_alphabeta(C))
         return sigma
     
-    def get_1p_RDM_spin(self, spin_strings, W, C):
-        D = np.zeros((self.num_spatial_orbitals,)*2)
+    # Note that this function is for alpha spin. C needs to be transposed for beta.
+    def _get_1p_RDM_spin(self, spin_strings, W, C):
+        D = np.zeros((self.num_spatial_orbitals,)*2, C.dtype)
+        C_c = C.conj()
         for J in spin_strings:
             j = self.address(J, W)
             occ = np.flatnonzero(J)
@@ -222,16 +228,119 @@ class DirectCI:
                     xi, I = self.single_exc(p,q,J)
                     if xi != 0:
                         i = self.address(I, W)
-                        D[p,q] += np.sum(xi*C[:,i]*C[:,j])
+                        D[p,q] += np.sum(xi*C_c[i,:]*C[j,:])
         return D
     
     def get_1p_RDM(self, C):
         if self.equal_spins:
-            D = 2*self.get_D_spin(self.I_alpha, self.W_alpha, C)
+            D = 2*self._get_1p_RDM_spin(self.I_alpha, self.W_alpha, C)
         else:
-            D = (self.get_D_spin(self.I_alpha, self.W_alpha, C) + 
-                self.get_D_spin(self.I_beta, self.W_beta, C))
+            D = (self._get_1p_RDM_spin(self.I_alpha, self.W_alpha, C) + 
+                self._get_1p_RDM_spin(self.I_beta, self.W_beta, C.T))
         return D
     
-    def get_2p_RDM_equal()
+
+    # Note that this function is for alpha spin. C needs to be transposed for beta.
+    def _get_2p_RDM_equal_spin(self, spin_strings, W, C):
+        d = np.zeros((self.num_spatial_orbitals,)*4, C.dtype)
+        C_c = C.conj()
+
+        for J in spin_strings:
+            j = self.address(J, W)
+            occ = np.flatnonzero(J)
+            for p in range(self.num_spatial_orbitals):
+                for r in occ:
+                    for q in range(self.num_spatial_orbitals):
+                        for s in occ:
+                            xi, I = self.double_exc(p,q,s,r,J)
+                            if xi != 0:
+                                i = self.address(I, W)
+                                d[p,q,r,s] += xi*np.sum(C_c[i,:]*C[j,:])
+
+        return d
+
+    
+    def _get_2p_RDM_mix_mat(self, C):
+        d = np.zeros((self.num_spatial_orbitals,)*2 + (self.num_beta_dets,)*2, C.dtype)
+        C_c = C.conj()
+        for J in self.I_alpha:
+            j = self.address(J, self.W_alpha)
+            occ = np.flatnonzero(J)
+            for p in range(self.num_spatial_orbitals): # Is this possible to do better?
+                for r in occ:
+                    xi, I = self.single_exc(p,r,J)
+                    if xi != 0:
+                        i = self.address(I, self.W_alpha)
+                        d[p,r,:,:] += xi*contract('i, j -> ij', C_c[i,:], C[j,:])
+        return d
+    
+    
+    def _get_2p_RDM_mixed_spin(self, C):
+        d = np.zeros((self.num_beta_dets,) + (self.num_spatial_orbitals,)*2 +(self.num_beta_dets,), C.dtype)
+        for J in self.I_beta:
+            j = self.address(J, self.W_beta)
+            occ = np.flatnonzero(J)
+            for q in range(self.num_spatial_orbitals): # Is this possible to do better?
+                for s in occ:
+                    xi, I = self.single_exc(q,s,J)
+                    if xi != 0:
+                        i = self.address(I, self.W_beta)
+                        d[j,q,s,i] += xi
+
+        dC = self._get_2p_RDM_mix_mat(C)
+        return contract('prij, jqsi -> pqrs', dC, d)
+    
+    ## For testing purpose, delete once it works.
+    # def _get_2p_RDM_mixed_spin_2(self, C):
+    #     d = np.zeros((self.num_spatial_orbitals,)*4, C.dtype)
+    #     C_c = C.conj()
+
+    #     for J_a in self.I_alpha:
+    #         j_a = self.address(J_a, self.W_alpha)
+    #         occ_a = np.flatnonzero(J_a)
+    #         for p in range(self.num_spatial_orbitals):
+    #             for r in occ_a:
+    #                 xi_a, I_a = self.single_exc(p,r,J_a)
+    #                 if xi_a != 0:
+    #                     for J_b in self.I_beta:
+    #                         j_b = self.address(J_b, self.W_beta)
+    #                         occ_b = np.flatnonzero(J_b)
+    #                         for q in range(self.num_spatial_orbitals):
+    #                             for s in occ_b:
+    #                                 xi_b, I_b = self.single_exc(q,s,J_b)
+    #                                 if xi_b != 0:
+    #                                     i_a = self.address(I_a, self.W_alpha)
+    #                                     i_b = self.address(I_b, self.W_beta)
+    #                                     d[p,q,r,s] += xi_a*xi_b*C_c[i_a,i_b]*C[j_a,j_b]
+
+    #     return d
+
+    # def get_2p_RDM_2(self, C):
+    #     if self.equal_spins:
+    #         return (2*self._get_2p_RDM_equal_spin(self.I_alpha, self.W_alpha, C) +
+    #                 2*self._get_2p_RDM_mixed_spin(C)) # Is this term needed when the spins are equal?
+    #     else:
+    #         return (self._get_2p_RDM_equal_spin(self.I_alpha, self.W_alpha, C) +
+    #                 self._get_2p_RDM_equal_spin(self.I_beta, self.W_beta, C.T) +
+    #                 2*self._get_2p_RDM_mixed_spin_2(C))
+
+
+    def get_2p_RDM(self, C):
+        if self.equal_spins:
+            return (2*self._get_2p_RDM_equal_spin(self.I_alpha, self.W_alpha, C) +
+                    2*self._get_2p_RDM_mixed_spin(C)) # Is this term needed when the spins are equal?
+        else:
+            return (self._get_2p_RDM_equal_spin(self.I_alpha, self.W_alpha, C) +
+                    self._get_2p_RDM_equal_spin(self.I_beta, self.W_beta, C.T) +
+                    2*self._get_2p_RDM_mixed_spin(C))
+        
+    def get_RDMs(self, C):
+        return self.get_1p_RDM(C), self.get_2p_RDM(C)
+    
+    def calculate_energy(self, C):
+        D, d = self.get_RDMs(C)
+        return self.calculate_energy_from_RDMs(D, d)
+    
+    def calculate_energy_from_RDMs(self, D, d):
+        return contract('pq, pq', D, self.h) + 0.5 * contract('pqrs, pqrs', self.g, d)
     
