@@ -1,5 +1,7 @@
 import numpy as np
 from opt_einsum import contract
+from jax import jit
+from functools import partial
 
 """
 Class for running DirectCI calculations.
@@ -10,56 +12,41 @@ are specified, the total number of electrons will be num_alpha_electrons + num_b
 """
 
 class SemiDirectCI:
-    def __init__(self, h, g, num_spatial_orbitals: int, num_alpha_electrons: int, num_beta_electrons: int = None):
-        self.h = h
-        self.g = g
-        self.num_spatial_orbitals = num_spatial_orbitals
+    def __init__(self, num_spatial_orbitals: int, num_alpha_electrons: int, num_beta_electrons: int = None):
 
         if num_beta_electrons == None:
             if num_alpha_electrons%2 == 0:
-                self.num_alpha_electrons = int(num_alpha_electrons/2)
-                self.num_beta_electrons = self.num_alpha_electrons
+                num_alpha_electrons = int(num_alpha_electrons/2)
+                num_beta_electrons = num_alpha_electrons
             else:
                 raise TypeError('An uneven number of electrons requires specifying' +
                                 ' both num_alpha_electrons and num_beta_electrons.')
-        else:
-            self.num_alpha_electrons = num_alpha_electrons
-            self.num_beta_electrons = num_beta_electrons
  
 
         # alpha determinants
-        self.I_alpha = self.get_slater_dets(num_spatial_orbitals, num_alpha_electrons)
-        self.num_alpha_dets = self.I_alpha.shape[0]
-        self.W_alpha = self.get_address_weights(num_spatial_orbitals, num_alpha_electrons)
+        I_alpha = self.get_slater_dets(num_spatial_orbitals, num_alpha_electrons)
+        num_alpha_dets = I_alpha.shape[0]
+        W_alpha = self.get_address_weights(num_spatial_orbitals, num_alpha_electrons)
         
-        if self.num_beta_electrons == self.num_alpha_electrons:
-            self.I_beta = self.I_alpha
-            self.num_beta_dets = self.num_alpha_dets
-            self.W_beta = self.W_alpha
-            self.equal_spins = True
-            self.E_pq_alpha = self._calculate_Epq(self.num_alpha_dets, self.I_alpha, self.W_alpha)
+        if num_beta_electrons == num_alpha_electrons:
+            self.E_pq_alpha = self._calculate_Epq(num_spatial_orbitals, num_alpha_dets, I_alpha, W_alpha)
             self.E_pq_beta = self.E_pq_alpha
-            self.E_pqrs_alpha = self._calculate_Epqrs(self.num_alpha_dets, self.I_alpha, self.W_alpha)
+            self.E_pqrs_alpha = self._calculate_Epqrs(num_spatial_orbitals, num_alpha_dets, I_alpha, W_alpha)
             self.E_pqrs_beta = self.E_pqrs_alpha
         else:
-            self.I_beta = self.get_slater_dets(num_spatial_orbitals, num_beta_electrons)
-            self.num_beta_dets = self.I_beta.shape[0]
-            self.W_beta = self.get_address_weights(num_spatial_orbitals, self.num_beta_electrons)
-            self.equal_spins = False
-            self.E_pq_alpha = self._calculate_Epq(self.num_alpha_dets, self.I_alpha, self.W_alpha)
-            self.E_pq_beta = self._calculate_Epq(self.num_beta_dets, self.I_beta, self.W_beta)
-            self.E_pqrs_alpha = self._calculate_Epqrs(self.num_alpha_dets, self.I_alpha, self.W_alpha)
-            self.E_pqrs_beta = self._calculate_Epqrs(self.num_beta_dets, self.I_beta, self.W_beta)
+            I_beta = self.get_slater_dets(num_spatial_orbitals, num_beta_electrons)
+            num_beta_dets = I_beta.shape[0]
+            W_beta = self.get_address_weights(num_spatial_orbitals, num_beta_electrons)
+            self.E_pq_alpha = self._calculate_Epq(num_spatial_orbitals, num_alpha_dets, I_alpha, W_alpha)
+            self.E_pq_beta = self._calculate_Epq(num_spatial_orbitals, num_beta_dets, I_beta, W_beta)
+            self.E_pqrs_alpha = self._calculate_Epqrs(num_spatial_orbitals, num_alpha_dets, I_alpha, W_alpha)
+            self.E_pqrs_beta = self._calculate_Epqrs(num_spatial_orbitals, num_beta_dets, I_beta, W_beta)
 
         # In the pink book this should be used instead of h, but then it doesn't work
         # Hochstuhl uses h as is, so maybe there is some different convention on
         # how the two-body integrals are calculated?
-        self.k = h #-0.5*np.einsum('prrq->pq', g) 
+        # k = h #-0.5*np.einsum('prrq->pq', g) 
 
-    def update_electron_integrals(self, h, g):
-        self.h = h
-        self.k = h
-        self.g = g
 
     # Generate a list of all Slater determinants. Order agrees with the address function.
     @staticmethod
@@ -90,9 +77,9 @@ class SemiDirectCI:
         return W
 
     # Use node weights to calculate address, see equation 3.73 in Hochstuhl
-    def address(self, n, W):
+    def address(self, n, num_spatial_orbitals, W):
         res = 0
-        for m in range(self.num_spatial_orbitals):
+        for m in range(num_spatial_orbitals):
             res += n[m]*W[m, int(np.sum(n[:m+1]))]
         return int(res)
     
@@ -130,87 +117,83 @@ class SemiDirectCI:
 
         return (-1)**gamma, n_pqsr
     
-    def _calculate_Epq(self, num_dets, spin_strings, W):
-        E_pq = np.zeros((num_dets,)*2+(self.num_spatial_orbitals,)*2)
+    def _calculate_Epq(self, num_spatial_orbitals, num_dets, spin_strings, W):
+        E_pq = np.zeros((num_dets,)*2+(num_spatial_orbitals,)*2)
         for J in spin_strings:
-            j = self.address(J, W)
+            j = self.address(J, num_spatial_orbitals, W)
             occ = np.flatnonzero(J)
-            for p in range(self.num_spatial_orbitals): # Is this possible to do better?
+            for p in range(num_spatial_orbitals): # Is this possible to do better?
                 for q in occ:
                     xi, I = self.single_exc(p,q,J)
                     if xi != 0:
-                        i = self.address(I, W)
+                        i = self.address(I, num_spatial_orbitals, W)
                         E_pq[i,j,p,q] += xi
         return E_pq
     
-    def _calculate_Epqrs(self, num_dets, spin_strings, W):
-        E_pqrs = np.zeros((num_dets,)*2+(self.num_spatial_orbitals,)*4)
+    def _calculate_Epqrs(self, num_spatial_orbitals, num_dets, spin_strings, W):
+        E_pqrs = np.zeros((num_dets,)*2+(num_spatial_orbitals,)*4)
 
         for J in spin_strings:
-            j = self.address(J, W)
+            j = self.address(J, num_spatial_orbitals, W)
             occ = np.flatnonzero(J)
-            for p in range(self.num_spatial_orbitals):
+            for p in range(num_spatial_orbitals):
                 for r in occ:
-                    for q in range(self.num_spatial_orbitals):
+                    for q in range(num_spatial_orbitals):
                         for s in occ:
                             xi, I = self.double_exc(p,q,s,r,J)
                             if xi != 0:
-                                i = self.address(I, W)
+                                i = self.address(I, num_spatial_orbitals, W)
                                 E_pqrs[i,j,p,q,r,s] += xi
         return E_pqrs
     
-            
-    def get_sigma_alpha(self, C):
-        return contract('ijpq, pq, jk -> ik', self.E_pq_alpha, self.k, C)
+    @partial(jit, static_argnums=0)
+    def get_sigma_alpha(self, C, h):
+        return contract('ijpq, pq, jk -> ik', self.E_pq_alpha, h, C, backend='jax')
     
-    def get_sigma_beta(self, C):
-        return contract('ijpq, pq, kj -> ki', self.E_pq_beta, self.k, C)
+    @partial(jit, static_argnums=0)
+    def get_sigma_beta(self, C, h):
+        return contract('ijpq, pq, kj -> ki', self.E_pq_beta, h, C, backend='jax')
     
-    def get_sigma_alpha2(self, C):
-        return contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, self.g, C)
+    @partial(jit, static_argnums=0)
+    def get_sigma_alpha2(self, C, g):
+        return contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, g, C, backend='jax')
     
-    def get_sigma_beta2(self, C):
-        return contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, self.g, C)
+    @partial(jit, static_argnums=0)
+    def get_sigma_beta2(self, C, g):
+        return contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, g, C, backend='jax')
     
-
-    def get_sigma_alphabeta(self, C):
-        return contract('pqrs, ijpq, klrs, jl -> ik', self.g, self.E_pq_alpha, self.E_pq_beta, C)
+    @partial(jit, static_argnums=0)
+    def get_sigma_alphabeta(self, C, g):
+        return contract('pqrs, ijpq, klrs, jl -> ik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax')
     
-
-    def get_sigma(self, C):
-        if self.equal_spins:
-            sigma = 2*(self.get_sigma_alpha(C) + self.get_sigma_alpha2(C)) + self.get_sigma_alphabeta(C)
-        else:
-            sigma = (self.get_sigma_alpha(C) + self.get_sigma_beta(C)
-                     + self.get_sigma_alpha2(C) + self.get_sigma_beta2(C)
-                     + self.get_sigma_alphabeta(C))
-        return sigma
+    @partial(jit, static_argnums=0)
+    def get_sigma(self, C, h, g):  
+        return (self.get_sigma_alpha(C, h) + self.get_sigma_beta(C, h)
+                + self.get_sigma_alpha2(C, g) + self.get_sigma_beta2(C, g)
+                + self.get_sigma_alphabeta(C, g))
     
+    @partial(jit, static_argnums=0)
     def get_1p_RDM(self, C):
-        if self.equal_spins:
-            D = 2*contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C)
-        else:
-            D = (contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C) + 
-                 contract('ijpq, ai, aj -> pq', self.E_pq_beta, C.conj(), C))
-        return D
+        return (contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C, backend='jax') + 
+                contract('ijpq, ai, aj -> pq', self.E_pq_beta, C.conj(), C, backend='jax'))
 
-
+    @partial(jit, static_argnums=0)
     def get_2p_RDM(self, C):
-        if self.equal_spins:
-            return (2*contract('ijpqrs, ia, ja -> pqrs', self.E_pqrs_alpha, C.conj(), C) + # Same spin term
-                    2*contract('ik, ijpq, klrs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C)) # Mixed spin term, is it needed when the spins are equal?
-        else:
-            return (contract('ijpqrs, ia, ja', self.E_pqrs_alpha, C.conj(), C) + # Both spin alpha
-                    contract('ijpqrs, ai, aj', self.E_pqrs_beta, C.conj(), C) + # Both spin beta
-                    2*contract('ik, ijpq, klrs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C)) # Mixed spin term, is it needed when the spins are equal?
-        
+        return (contract('ijpqrs, ia, ja', self.E_pqrs_alpha, C.conj(), C, backend='jax') + # Both spin alpha
+                contract('ijpqrs, ai, aj', self.E_pqrs_beta, C.conj(), C, backend='jax') + # Both spin beta
+                contract('ik, ijpq, klrs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C, backend='jax') + # Mixed spin term
+                contract('ki, ijpq, klrs, lj -> pqrs', C.conj(), self.E_pq_beta, self.E_pq_alpha, C, backend='jax')) # Mixed spin term
+
+    @partial(jit, static_argnums=0)    
     def get_RDMs(self, C):
         return self.get_1p_RDM(C), self.get_2p_RDM(C)
-    
-    def calculate_energy(self, C):
+
+    @partial(jit, static_argnums=0)  
+    def calculate_energy(self, C, h, g):
         D, d = self.get_RDMs(C)
-        return self.calculate_energy_from_RDMs(D, d)
+        return self.calculate_energy_from_RDMs(D, d, h, g)
     
-    def calculate_energy_from_RDMs(self, D, d):
-        return contract('pq, pq', D, self.h) + 0.5 * contract('pqrs, pqrs', self.g, d)
+    @partial(jit, static_argnums=0)
+    def calculate_energy_from_RDMs(self, D, d, h, g):
+        return contract('pq, pq', D, h) + 0.5 * contract('pqrs, pqrs', g, d, backend='jax')
     
