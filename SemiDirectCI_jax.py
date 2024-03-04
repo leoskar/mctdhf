@@ -1,5 +1,7 @@
 import numpy as np
 from opt_einsum import contract
+from jax import jit
+from functools import partial
 
 """
 Class for running DirectCI calculations.
@@ -144,43 +146,54 @@ class SemiDirectCI:
                                 E_pqrs[i,j,p,q,r,s] += xi
         return E_pqrs
     
+    @partial(jit, static_argnums=0)
     def get_sigma_alpha(self, C, h):
-        return contract('ijpq, pq, jk -> ik', self.E_pq_alpha, h, C)
+        return contract('ijpq, pq, jk -> ik', self.E_pq_alpha, h, C, backend='jax')
     
+    @partial(jit, static_argnums=0)
     def get_sigma_beta(self, C, h):
-        return contract('ijpq, pq, kj -> ki', self.E_pq_beta, h, C)
- 
+        return contract('ijpq, pq, kj -> ki', self.E_pq_beta, h, C, backend='jax')
+    
+    @partial(jit, static_argnums=0)
     def get_sigma_alpha2(self, C, g):
-        return contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, g, C)
+        return contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, g, C, backend='jax') 
     
+    @partial(jit, static_argnums=0)
     def get_sigma_beta2(self, C, g):
-        return contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, g, C)
+        return contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, g, C, backend='jax') 
     
+    @partial(jit, static_argnums=0)
     def get_sigma_alphabeta(self, C, g):
-        return contract('pqrs, ijpr, klqs, jl -> ik', g, self.E_pq_alpha, self.E_pq_beta, C)
+        return contract('pqrs, ijpr, klqs, jl -> ik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax') 
     
+    @partial(jit, static_argnums=0)
     def get_sigma(self, C, h, g):  
         return (self.get_sigma_alpha(C, h) + self.get_sigma_beta(C, h)
                 + self.get_sigma_alpha2(C, g) + self.get_sigma_beta2(C, g)
                 + 2*self.get_sigma_alphabeta(C, g))
     
+    @partial(jit, static_argnums=0)
     def get_1p_RDM(self, C):
-        return (contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C) + 
-                contract('ijpq, ai, aj -> pq', self.E_pq_beta, C.conj(), C))
+        return (contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C, backend='jax') + 
+                contract('ijpq, ai, aj -> pq', self.E_pq_beta, C.conj(), C, backend='jax'))
 
+    @partial(jit, static_argnums=0)
     def get_2p_RDM(self, C):
-        return (contract('ijpqrs, ia, ja', self.E_pqrs_alpha, C.conj(), C) + # Both spin alpha
-                contract('ijpqrs, ai, aj', self.E_pqrs_beta, C.conj(), C) + # Both spin beta
-                contract('ik, ijpr, klqs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C) + # Mixed spin term
-                contract('ki, ijpr, klqs, lj -> pqrs', C.conj(), self.E_pq_beta, self.E_pq_alpha, C)) # Mixed spin term
-  
+        return (contract('ijpqrs, ia, ja', self.E_pqrs_alpha, C.conj(), C, backend='jax') + # Both spin alpha
+                contract('ijpqrs, ai, aj', self.E_pqrs_beta, C.conj(), C, backend='jax') + # Both spin beta
+                contract('ik, ijpr, klqs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C, backend='jax') + # Mixed spin term
+                contract('ki, ijpr, klqs, lj -> pqrs', C.conj(), self.E_pq_beta, self.E_pq_alpha, C, backend='jax')) # Mixed spin term
+
+    @partial(jit, static_argnums=0)    
     def get_RDMs(self, C):
         return self.get_1p_RDM(C), self.get_2p_RDM(C)
 
+    @partial(jit, static_argnums=0)  
     def calculate_energy(self, C, h, g):
         D, d = self.get_RDMs(C)
         return self.calculate_energy_from_RDMs(D, d, h, g)
     
+    @partial(jit, static_argnums=0)
     def calculate_energy_from_RDMs(self, D, d, h, g):
-        return contract('pq, pq', D, h) + 0.5 * contract('pqrs, pqrs', g, d)
+        return contract('pq, pq', D, h) + 0.5 * contract('pqrs, pqrs', g, d, backend='jax')
     
