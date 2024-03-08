@@ -3,17 +3,21 @@ from opt_einsum import contract
 from jax import jit
 from functools import partial
 
-"""
-Class for running DirectCI calculations.
 
-If only the number of alpha electrons is specified, it is assumed to be the total number of electrons
-and they will be distributed evenly over the two spins. If both num_alpha_electrons and num_beta_electrons
-are specified, the total number of electrons will be num_alpha_electrons + num_beta_electrons.
-"""
 
 class SemiDirectCI:
-    def __init__(self, num_spatial_orbitals: int, num_alpha_electrons: int, num_beta_electrons: int = None):
+    """Class for running SemiDirectCI calculations.
 
+    The products sigma = HC are evaluated without directly, however the 
+    excitation operators are stored as tensors.
+
+    If only the number of alpha electrons is specified, it is assumed to be the
+    total number of electrons and they will be distributed evenly over the two 
+    spins. If both num_alpha_electrons and num_beta_electrons are specified, the 
+    total number of electrons will be num_alpha_electrons + num_beta_electrons.
+    """
+
+    def __init__(self, num_spatial_orbitals: int, num_alpha_electrons: int, num_beta_electrons: int = None):
         if num_beta_electrons == None:
             if num_alpha_electrons%2 == 0:
                 num_alpha_electrons = int(num_alpha_electrons/2)
@@ -48,9 +52,11 @@ class SemiDirectCI:
         # k = h #-0.5*np.einsum('prrq->pq', g) 
 
 
-    # Generate a list of all Slater determinants. Order agrees with the address function.
+    
     @staticmethod
     def get_slater_dets(num_orbitals, num_electrons):
+        """ Generate a list of all Slater determinants. Order agrees with the address function."""
+
         dets = []
         if num_electrons == 0:
             dets.append(np.zeros(num_orbitals))
@@ -62,11 +68,12 @@ class SemiDirectCI:
             for d in SemiDirectCI.get_slater_dets(num_orbitals-1, num_electrons-1):
                 dets.append(np.concatenate((d, [1])))
 
-        return np.array(dets)
+        return np.array(dets, dtype=bool) 
     
     @staticmethod
     def get_address_weights(num_orbitals, num_electrons):
-        # Calculate node weights, see Fig. 19 and equation 3.70 in Hochstuhl
+        """Calculate node weights, see Fig. 19 and equation 3.70 in Hochstuhl et al."""
+
         W = np.zeros((num_orbitals+1, num_electrons+1))
         W[:,0] = 1
 
@@ -76,16 +83,18 @@ class SemiDirectCI:
 
         return W
 
-    # Use node weights to calculate address, see equation 3.73 in Hochstuhl
     def address(self, n, num_spatial_orbitals, W):
+        """Use node weights to calculate address, see equation 3.73 in Hochstuhl."""
+
         res = 0
         for m in range(num_spatial_orbitals):
             res += n[m]*W[m, int(np.sum(n[:m+1]))]
         return int(res)
     
 
-    # Define excitation operators
-    def single_exc(self, p,q,n):
+    def single_exc(self, p, q, n):
+        """Evaluate a single particle excitation a^+_pa_q."""
+
         n_pq = np.copy(n)
         n_pq[q] = 0
 
@@ -98,6 +107,8 @@ class SemiDirectCI:
         return gamma, n_pq
 
     def double_exc(self, p, q, s, r, n):
+        """Evaluate a two particle excitation a^+_pa^+_qa_sa_r."""
+
         if s==r or p == q:
             return 0, 0
 
@@ -118,6 +129,8 @@ class SemiDirectCI:
         return (-1)**gamma, n_pqsr
     
     def _calculate_Epq(self, num_spatial_orbitals, num_dets, spin_strings, W):
+        """Calculate matrix of single particle excitations."""
+
         E_pq = np.zeros((num_dets,)*2+(num_spatial_orbitals,)*2)
         for J in spin_strings:
             j = self.address(J, num_spatial_orbitals, W)
@@ -131,6 +144,8 @@ class SemiDirectCI:
         return E_pq
     
     def _calculate_Epqrs(self, num_spatial_orbitals, num_dets, spin_strings, W):
+        """Calculate matrix of two particle excitations."""
+
         E_pqrs = np.zeros((num_dets,)*2+(num_spatial_orbitals,)*4)
 
         for J in spin_strings:
@@ -148,44 +163,59 @@ class SemiDirectCI:
     
     @partial(jit, static_argnums=0)
     def get_sigma_alpha(self, C, h):
+        """Get single particle sigma with alpha spin."""
         return contract('ijpq, pq, jk -> ik', self.E_pq_alpha, h, C, backend='jax')
     
     @partial(jit, static_argnums=0)
     def get_sigma_beta(self, C, h):
+        """Get single particle sigma with beta spin."""
         return contract('ijpq, pq, kj -> ki', self.E_pq_beta, h, C, backend='jax')
     
     @partial(jit, static_argnums=0)
     def get_sigma_alpha2(self, C, g):
-        return contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, g, C, backend='jax') 
+        """Get two particle sigma, both with alpha spin."""
+        return 0.5*contract('ijpqrs, pqrs, jk -> ik', self.E_pqrs_alpha, g, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma_beta2(self, C, g):
-        return contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, g, C, backend='jax') 
+        """Get two particle sigma, both with beta spin."""
+        return 0.5*contract('ijpqrs, pqrs, kj -> ki', self.E_pqrs_beta, g, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma_alphabeta(self, C, g):
-        return contract('pqrs, ijpr, klqs, jl -> ik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax') 
+        """Get two particle sigma, with mixed alpha and beta spin."""
+        return 0.5*contract('pqrs, ijpr, klqs, jl -> ik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma(self, C, h, g):  
+        """Total value of sigma = HC."""
+
         return (self.get_sigma_alpha(C, h) + self.get_sigma_beta(C, h)
                 + self.get_sigma_alpha2(C, g) + self.get_sigma_beta2(C, g)
                 + 2*self.get_sigma_alphabeta(C, g))
     
+
     @partial(jit, static_argnums=0)
     def get_1p_RDM(self, C):
+        """Calculate single particle reduced density matrix."""
+
         return (contract('ijpq, ia, ja -> pq', self.E_pq_alpha, C.conj(), C, backend='jax') + 
                 contract('ijpq, ai, aj -> pq', self.E_pq_beta, C.conj(), C, backend='jax'))
 
+
     @partial(jit, static_argnums=0)
     def get_2p_RDM(self, C):
+        """Calculate two particle reduced density matrix."""
+
         return (contract('ijpqrs, ia, ja', self.E_pqrs_alpha, C.conj(), C, backend='jax') + # Both spin alpha
                 contract('ijpqrs, ai, aj', self.E_pqrs_beta, C.conj(), C, backend='jax') + # Both spin beta
                 contract('ik, ijpr, klqs, jl -> pqrs', C.conj(), self.E_pq_alpha, self.E_pq_beta, C, backend='jax') + # Mixed spin term
                 contract('ki, ijpr, klqs, lj -> pqrs', C.conj(), self.E_pq_beta, self.E_pq_alpha, C, backend='jax')) # Mixed spin term
 
+
     @partial(jit, static_argnums=0)    
     def get_RDMs(self, C):
+        """Get one and two particle reduced density matrix."""
         return self.get_1p_RDM(C), self.get_2p_RDM(C)
 
     @partial(jit, static_argnums=0)  
