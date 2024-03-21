@@ -7,8 +7,6 @@ from scipy.special import comb
 from opt_einsum import contract
 
 from SemiDirectCI_jax import SemiDirectCI
-from integrators import *
-
 
 
 class MCTDHF:
@@ -67,9 +65,9 @@ class MCTDHF:
     def transform_h(self, h, b, bc):
         """Transform the single particle electron integrals to he MCTDHF basis."""
 
-        h_1 = contract('cjm, ij -> cim', b, h, backend='jax')
-        h_2 = contract('cin, cim -> cnm', bc, h_1, backend='jax')
-        h_3 = contract('cin, cnm -> cim', b, h_2, backend='jax')
+        h_1 = contract('jm, ij -> im', b, h, backend='jax')
+        h_2 = contract('in, im -> nm', bc, h_1, backend='jax')
+        h_3 = contract('in, nm -> im', b, h_2, backend='jax')
         
         return h_1,h_2,h_3
     
@@ -78,10 +76,10 @@ class MCTDHF:
     def transform_g(self, g, b, bc):
         """Transform the two particle electron integrals to he MCTDHF basis."""
 
-        g_2 = contract('cjq, cls, ijkl -> ciqks', bc, b, g, backend='jax')
-        g_3 = contract('ckr, ciqks -> ciqrs', b, g_2, backend='jax')
-        g_4 = contract('cip, ciqrs -> cpqrs', bc, g_3, backend='jax')
-        g_5 = contract('cip, cpqrs -> ciqrs', b, g_4, backend='jax')
+        g_2 = contract('jq, ls, ijkl -> iqks', bc, b, g, backend='jax')
+        g_3 = contract('kr, iqks -> iqrs', b, g_2, backend='jax')
+        g_4 = contract('ip, iqrs -> pqrs', bc, g_3, backend='jax')
+        g_5 = contract('ip, pqrs -> iqrs', b, g_4, backend='jax')
         
         return g_3,g_4,g_5
     
@@ -93,12 +91,12 @@ class MCTDHF:
         bc = b.conj()
 
         h = self.h + self.ht(t)
-        h_1 = contract('cjm, ij -> cim', b, h, backend='jax')
-        h_2 = contract('cin, cim -> cnm', bc, h_1, backend='jax')
+        h_1 = contract('jm, ij -> im', b, h, backend='jax')
+        h_2 = contract('in, im -> nm', bc, h_1, backend='jax')
 
-        g_2 = contract('cjq, cls, ijkl -> ciqks', bc, b, self.g, backend='jax')
-        g_3 = contract('ckr, ciqks -> ciqrs', b, g_2, backend='jax')
-        g_4 = contract('cip, ciqrs -> cpqrs', bc, g_3, backend='jax')
+        g_2 = contract('jq, ls, ijkl -> iqks', bc, b, self.g, backend='jax')
+        g_3 = contract('kr, iqks -> iqrs', b, g_2, backend='jax')
+        g_4 = contract('ip, iqrs -> pqrs', bc, g_3, backend='jax')
 
         return self.dCI.calculate_energy(C, h_2, g_4)
     
@@ -112,7 +110,7 @@ class MCTDHF:
     def _y_to_Cb(self, y):
         C, b = jnp.split(y, [self.num_slater_dets*self.num_states])
         C = jnp.reshape(C, (self.num_states, self.num_alpha_dets, self.num_beta_dets))
-        b = jnp.reshape(b, (self.num_states, self.num_spatial_orbitals, self.num_mctdhf_orbitals))
+        b = jnp.reshape(b, (self.num_spatial_orbitals, self.num_mctdhf_orbitals))
 
         return C, b
     
@@ -124,11 +122,20 @@ class MCTDHF:
         DOI: 10.1016/j.jcp.2006.06.006
         """
 
-        b = jnp.divide(b, jnp.sqrt(contract('cij, cij -> cj', b.conj(), b, backend='jax')).reshape(self.num_states,1,-1))
-        u, _, vh = jnp.linalg.svd(b.reshape(self.num_states, -1), full_matrices=False)
-        b = jnp.reshape(u@vh, (self.num_states, self.num_spatial_orbitals, self.num_mctdhf_orbitals))
-        u2, _, vh2 = jnp.linalg.svd(b, full_matrices=False)
-        return u2@vh2
+        b = jnp.divide(b, jnp.sqrt(contract('ij, ij -> j', b.conj(), b, backend='jax')))
+        ## Overlap renormalisation
+        # u, _, vh = jnp.linalg.svd(b, full_matrices=False)
+        # return u@vh
+
+        ## Gram-Schmidt renormalisation
+        for i in range(b.shape[1]):
+            orto_adjustment = 0
+            for j in range(0, i):
+                orto_adjustment += jnp.dot(b[:, i], b[:, j])*b[:, j]
+
+            b = b.at[:,i].add(-orto_adjustment)
+
+        return b
 
     @partial(jit, static_argnums=0)
     def ortonorm_C(self, C):
@@ -139,8 +146,20 @@ class MCTDHF:
         """
 
         C = jnp.divide(C, jnp.sqrt(contract('cij, cij -> c', C.conj(), C, backend='jax')).reshape(self.num_states,1,1))
-        u, _, vh = jnp.linalg.svd(C.reshape(self.num_states, -1), full_matrices=False)
-        return jnp.reshape(u@vh, (self.num_states, self.num_alpha_dets, self.num_beta_dets))
+
+        ## Overlap renormalisation
+        # u, _, vh = jnp.linalg.svd(C.reshape(self.num_states, -1), full_matrices=False)
+        # return jnp.reshape(u@vh, (self.num_states, self.num_alpha_dets, self.num_beta_dets))
+    
+        # Gram-Schmidt renormalisation
+        for i in range(C.shape[0]):
+            orto_adjustment = 0
+            for j in range(0, i):
+                orto_adjustment += contract('ij,ij', C[i], C[j])*C[j]
+
+            C = C.at[i].add(-orto_adjustment)
+
+        return C
 
 
     @partial(jit, static_argnums=0)
@@ -156,9 +175,9 @@ class MCTDHF:
         g_3, g_4, g_5 = self.transform_g(self.g, b, bc)
 
         D, d = self.dCI.get_RDMs(C)
-        D_inv = jnp.linalg.pinv(D)
+        D_inv = jnp.linalg.pinv(D[0])
       
-        b_dot = -self.time*(h_1 - h_3 + contract('cnp, cpqrs, ciqrs -> cin', D_inv, d, g_3-g_5, backend='jax'))
+        b_dot = -self.time*(h_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], g_3-g_5, backend='jax'))
 
         sigma = self.dCI.get_sigma(C, h_2, g_4)
         C_dot = -self.time*sigma
@@ -167,12 +186,12 @@ class MCTDHF:
     
 
 
-    def integrate(self, num_steps: int, dt: float, t_init = 0, b_init = None, C_init = None, normalize = None):
+    def integrate(self, integrator, num_steps: int, t_init = 0, b_init = None, C_init = None, normalize = None):
         """Integrate the MCTDHF problem.
 
         Args:
+            integrator: The integrator used to solve the problem. 
             num_steps (int): Number of integration steps
-            dt (float): Time step used in integration
             t_init (int, optional): Initial time. Defaults to 0.
             b_init (optional): Initial transformation coefficients. Defaults to random.
             C_init (optional): Initial CI coefficients. Defaults to random.
@@ -185,7 +204,7 @@ class MCTDHF:
         if b_init is None:
             # Generate random orthonormal vectors
             rng = np.random.default_rng()
-            r = rng.random((self.num_states, self.num_spatial_orbitals, self.num_mctdhf_orbitals))
+            r = rng.random((self.num_spatial_orbitals, self.num_mctdhf_orbitals))
             u, _, vh = np.linalg.svd(r, full_matrices=False)
             b_init = jnp.array((u@vh), jnp.complex64)
 
@@ -200,7 +219,6 @@ class MCTDHF:
         if normalize is None:
             normalize = self.imag_time
 
-        rk4 = get_runge_kutta_4_solver(self, dt)
         y = self._Cb_to_y(C_init, b_init)
 
         E_init = self.get_E(0, b_init, C_init)
@@ -211,7 +229,7 @@ class MCTDHF:
 
         t = t_init
         for _ in range(num_steps):
-            t, E, C, b = self._step(t, y, rk4, normalize)
+            t, E, C, b = self._step(t, y, integrator, normalize)
 
             Es.append(E)
             Cs.append(C)
@@ -248,7 +266,7 @@ class MCTDHF:
         S_a = jnp.linalg.det(s_a.reshape((self.num_alpha_dets,)*2+(self.num_alpha_electrons,)*2))
 
         if self.num_beta_electrons == self.num_alpha_electrons:
-            return contract('ik,jl,ij,kl', C1.conj(), C2, S_a, S_a, backend='jax')
+            return contract('cik,cjl,ij,kl->c', C1.conj(), C2, S_a, S_a, backend='jax')
     
         I_beta = SemiDirectCI.get_slater_dets(self.num_mctdhf_orbitals, self.num_beta_electrons)
 
@@ -256,14 +274,15 @@ class MCTDHF:
         s_b = s_b[jnp.nonzero(s_b, size=(self.num_beta_dets*self.num_beta_electrons)**2)]
         S_b = jnp.linalg.det(s_b.reshape((self.num_beta_dets,)*2+(self.num_beta_electrons,)*2))
 
-        return contract('ik,jl,ij,kl', C1.conj(), C2, S_a, S_b, backend='jax')
+        return contract('cik,cjl,ij,kl->c', C1.conj(), C2, S_a, S_b, backend='jax')
     
 
-    def calculate_particle_density(self, b, C, spf):
+    def calculate_particle_densities(self, b, C, spf):
         """Calculate the particle density"""
 
-        D = self.dCI.get_1p_RDM(C)
-        return jnp.real(jnp.diag(spf.T@(b@D@b.T)@spf))
+        Ds = self.dCI.get_1p_RDM(C)
+        return contract('ix,in,snm,jm,jx->sx',spf,b,Ds,b,spf)
+        
     
 
 

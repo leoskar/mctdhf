@@ -164,27 +164,27 @@ class SemiDirectCI:
     @partial(jit, static_argnums=0)
     def get_sigma_alpha(self, C, h):
         """Get single particle sigma with alpha spin."""
-        return contract('ijpq, cpq, cjk -> cik', self.E_pq_alpha, h, C, backend='jax')
+        return contract('ijpq, pq, cjk -> cik', self.E_pq_alpha, h, C, backend='jax')
     
     @partial(jit, static_argnums=0)
     def get_sigma_beta(self, C, h):
         """Get single particle sigma with beta spin."""
-        return contract('ijpq, cpq, ckj -> cki', self.E_pq_beta, h, C, backend='jax')
+        return contract('ijpq, pq, ckj -> cki', self.E_pq_beta, h, C, backend='jax')
     
     @partial(jit, static_argnums=0)
     def get_sigma_alpha2(self, C, g):
         """Get two particle sigma, both with alpha spin."""
-        return 0.5*contract('ijpqrs, cpqrs, cjk -> cik', self.E_pqrs_alpha, g, C, backend='jax') 
+        return 0.5*contract('ijpqrs, pqrs, cjk -> cik', self.E_pqrs_alpha, g, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma_beta2(self, C, g):
         """Get two particle sigma, both with beta spin."""
-        return 0.5*contract('ijpqrs, cpqrs, ckj -> cki', self.E_pqrs_beta, g, C, backend='jax') 
+        return 0.5*contract('ijpqrs, pqrs, ckj -> cki', self.E_pqrs_beta, g, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma_alphabeta(self, C, g):
         """Get two particle sigma, with mixed alpha and beta spin."""
-        return 0.5*contract('cpqrs, ijpr, klqs, cjl -> cik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax') 
+        return 0.5*contract('pqrs, ijpr, klqs, cjl -> cik', g, self.E_pq_alpha, self.E_pq_beta, C, backend='jax') 
     
     @partial(jit, static_argnums=0)
     def get_sigma(self, C, h, g):  
@@ -225,5 +225,5 @@ class SemiDirectCI:
     
     @partial(jit, static_argnums=0)
     def calculate_energy_from_RDMs(self, D, d, h, g):
-        return contract('cpq, cpq -> c', D, h) + 0.5 * contract('cpqrs, cpqrs -> c', g, d, backend='jax')
+        return contract('cpq, pq -> c', D, h) + 0.5 * contract('pqrs, cpqrs -> c', g, d, backend='jax')
     
