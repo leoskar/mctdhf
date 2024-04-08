@@ -303,7 +303,7 @@ class MCTDHF:
 class MCTDHF_sinc(MCTDHF):
     @partial(jit, static_argnums=0)
     def transform_g(self, g, b, bc):
-        g_2 = contract('jq, js, ij -> iqs', bc, b, self.g, backend='jax')
+        g_2 = contract('jq, js, ij -> iqs', bc, b, g, backend='jax')
         g_3 = contract('ir, iqs -> iqrs', b, g_2, backend='jax')
         g_4 = contract('ip, iqrs -> pqrs', bc, g_3, backend='jax')
         g_5 = contract('ip, pqrs -> iqrs', b, g_4, backend='jax')
