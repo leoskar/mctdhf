@@ -33,12 +33,16 @@ class MCTDHF:
         The number of electrons with beta spin.
     imag_time : bool
         Whether to perform the time evolution in imaginary time, default is false.
-    
+    S: ndarray (num_spatial_orbitals,)*2
+        Overlap matrix for the basis function. The basis is assumed to be 
+        ortonormal if no overlap matrix is provided.
     
     """
 
     def __init__(self, h, ht, g, num_mctdhf_orbitals, num_spatial_orbitals, 
-                 num_alpha_electrons, num_beta_electrons, num_states = 1, imag_time=False):
+                 num_alpha_electrons, num_beta_electrons, 
+                 num_states = 1, imag_time=False, S = None):
+        
         self.h = h
         self.ht = ht
         self.g = g
@@ -60,6 +64,8 @@ class MCTDHF:
         
         self.imag_time = imag_time
         self.time = 1 if imag_time else 1j
+
+        self.S_inv = np.eye(num_spatial_orbitals) if S is None else np.linalg.inv(S)
         
     
     @partial(jit, static_argnums=0)
@@ -178,7 +184,10 @@ class MCTDHF:
         D, d = self.dCI.get_RDMs(C)
         D_inv = jnp.linalg.pinv(D[0])
       
-        b_dot = -self.time*(h_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], g_3-g_5, backend='jax'))
+        Sh_1 = contract('kl, lm -> km', self.S_inv, h_1)
+        Sg_3 = contract('kl, lqrs -> kqrs', self.S_inv, g_3)
+
+        b_dot = -self.time*(Sh_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], Sg_3-g_5, backend='jax'))
 
         sigma = self.dCI.get_sigma(C, h_2, g_4)
         C_dot = -self.time*sigma
