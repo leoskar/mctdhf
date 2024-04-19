@@ -184,8 +184,8 @@ class MCTDHF:
         D, d = self.dCI.get_RDMs(C)
         D_inv = jnp.linalg.pinv(D[0])
       
-        Sh_1 = contract('kl, lm -> km', self.S_inv, h_1)
-        Sg_3 = contract('kl, lqrs -> kqrs', self.S_inv, g_3)
+        Sh_1 = contract('kl, lm -> km', self.S_inv, h_1, backend='jax')
+        Sg_3 = contract('kl, lqrs -> kqrs', self.S_inv, g_3, backend='jax')
 
         b_dot = -self.time*(Sh_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], Sg_3-g_5, backend='jax'))
 
