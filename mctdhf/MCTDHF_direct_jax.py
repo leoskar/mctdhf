@@ -65,7 +65,12 @@ class MCTDHF:
         self.imag_time = imag_time
         self.time = 1 if imag_time else 1j
 
-        self.S_inv = np.eye(num_spatial_orbitals) if S is None else np.linalg.inv(S)
+        if S is None:
+            self.S = np.eye(num_spatial_orbitals)
+            self.S_inv = np.eye(num_spatial_orbitals)
+        else:
+            self.S = S
+            self.S_inv = np.linalg.inv(S)
         
     
     @partial(jit, static_argnums=0)
@@ -138,7 +143,7 @@ class MCTDHF:
         for i in range(b.shape[1]):
             orto_adjustment = 0
             for j in range(0, i):
-                orto_adjustment += jnp.dot(b[:, i], b[:, j])*b[:, j]
+                orto_adjustment += b[:, j]*contract('i,j,ij', b[:, i], b[:, j], self.S, backend='jax')
 
             b = b.at[:,i].add(-orto_adjustment)
 
