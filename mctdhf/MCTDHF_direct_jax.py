@@ -138,7 +138,7 @@ class MCTDHF:
         DOI: 10.1016/j.jcp.2006.06.006
         """
 
-        b = jnp.divide(b, jnp.sqrt(contract("ij, ij -> j", b.conj(), b, backend="jax")))
+        #b = jnp.divide(b, jnp.sqrt(contract("ij, ij -> j", b.conj(), b, backend="jax")))
         ## Overlap renormalisation
         # u, _, vh = jnp.linalg.svd(b, full_matrices=False)
         # return u@vh
@@ -152,6 +152,7 @@ class MCTDHF:
                 )
 
             b = b.at[:, i].add(-orto_adjustment)
+            b = b.at[:, i].divide(jnp.sqrt(contract("i,i", b[:,i].conj(), b[:,i], backend="jax")))
 
         return b
 
@@ -163,12 +164,12 @@ class MCTDHF:
         DOI: 10.1016/j.jcp.2006.06.006
         """
 
-        C = jnp.divide(
-            C,
-            jnp.sqrt(contract("cij, cij -> c", C.conj(), C, backend="jax")).reshape(
-                self.num_states, 1, 1
-            ),
-        )
+        # C = jnp.divide(
+        #     C,
+        #     jnp.sqrt(contract("cij, cij -> c", C.conj(), C, backend="jax")).reshape(
+        #         self.num_states, 1, 1
+        #     ),
+        # )
 
         ## Overlap renormalisation
         # u, _, vh = jnp.linalg.svd(C.reshape(self.num_states, -1), full_matrices=False)
@@ -181,6 +182,7 @@ class MCTDHF:
                 orto_adjustment += contract("ij,ij", C[i], C[j]) * C[j]
 
             C = C.at[i].add(-orto_adjustment)
+            C = C.at[i].divide(jnp.sqrt(contract("ij, ij", C[i].conj(), C[i])))
 
         return C
 
