@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import numpy as np
+import matplotlib.pyplot as plt
 
 from jax import jit
 from functools import partial
@@ -37,7 +38,9 @@ class MCTDHF:
     """
 
     def __init__(self, h, ht, g, num_mctdhf_orbitals, num_spatial_orbitals, 
-                 num_alpha_electrons, num_beta_electrons, num_states = 1, imag_time=False):
+                 num_alpha_electrons, num_beta_electrons, 
+                 num_states = 1, imag_time=False, S = None):
+        
         self.h = h
         self.ht = ht
         self.g = g
@@ -59,6 +62,8 @@ class MCTDHF:
         
         self.imag_time = imag_time
         self.time = 1 if imag_time else 1j
+
+        self.S_inv = np.eye(num_spatial_orbitals) if S is None else np.linalg.inv(S)
         
     
     @partial(jit, static_argnums=0)
@@ -177,7 +182,10 @@ class MCTDHF:
         D, d = self.dCI.get_RDMs(C)
         D_inv = jnp.linalg.pinv(D[0])
       
-        b_dot = -self.time*(h_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], g_3-g_5, backend='jax'))
+        Sh_1 = contract('kl, lm -> km', self.S_inv, h_1, backend='jax')
+        Sg_3 = contract('kl, lqrs -> kqrs', self.S_inv, g_3, backend='jax')
+
+        b_dot = -self.time*(Sh_1 - h_3 + contract('np, pqrs, iqrs -> in', D_inv, d[0], Sg_3-g_5, backend='jax'))
 
         sigma = self.dCI.get_sigma(C, h_2, g_4)
         C_dot = -self.time*sigma
@@ -283,6 +291,18 @@ class MCTDHF:
         Ds = self.dCI.get_1p_RDM(C)
         return contract('ix,in,snm,jm,jx->sx',spf,b,Ds,b,spf)
         
+    def plot_Cbe(self, ts, Cs, bs, Es):
+        fig, axs = plt.subplots(1, 3, figsize=(16,6))
+        axs[0].plot(ts, np.real(Cs.reshape(Cs.shape[0],-1)))
+        axs[0].set_title('Cs')
+        axs[1].plot(ts, np.real(bs.reshape(-1, self.num_spatial_orbitals, self.num_mctdhf_orbitals)[:,:,0]))
+        axs[1].set_title('bs')
+        axs[2].plot(ts, np.real(Es))
+        #axs[2].semilogy()
+        #axs[2].set_ylim([0,5])
+        axs[2].set_title('E')
+        
+        plt.show()
     
 
 
